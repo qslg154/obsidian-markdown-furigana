@@ -1,41 +1,36 @@
 import { Plugin, MarkdownPostProcessor, MarkdownPostProcessorContext } from 'obsidian'
 import { RangeSetBuilder } from "@codemirror/state"
 import { ViewPlugin, WidgetType, EditorView, ViewUpdate, Decoration, DecorationSet } from '@codemirror/view'
-
-// Regular Expression for {{kanji|kana|kana|...}} format
-const REGEXP = /{((?:[\u2E80-\uA4CF\uFF00-\uFFEF])+)((?:\\?\|[^ -\/{-~:-@\[-`]*)+)}/gm;
-
+// Regular Expression for kanji[kana] format (Anki-style)
+const REGEXP = /([\u2E80-\uA4CF\uFF00-\uFFEF]+)\[([^\]]+)\]/gm;
 // Main Tags to search for Furigana Syntax
 const TAGS = 'p, h1, h2, h3, h4, h5, h6, ol, ul, table'
-
 const convertFurigana = (element: Text): Node => {
   const matches = Array.from(element.textContent.matchAll(REGEXP))
   let lastNode = element
   for (const match of matches) {
-    const furi = match[2].split('|').slice(1) // First Element will be empty
-    const kanji = furi.length === 1 ? [match[1]] : match[1].split('')
-    if (kanji.length === furi.length) {
-      // Number of Characters in first section must be equal to number of furigana sections (unless only one furigana section)
-      const rubyNode = document.createElement('ruby')
-      rubyNode.addClass('furi')
-      kanji.forEach((k, i) => {
-        rubyNode.appendText(k)
-        rubyNode.createEl('rt', { text: furi[i] })
-      })
-      let offset = lastNode.textContent.indexOf(match[0])
-      const nodeToReplace = lastNode.splitText(offset)
-      lastNode = nodeToReplace.splitText(match[0].length)
-      nodeToReplace.replaceWith(rubyNode)
+    let offset = lastNode.textContent.indexOf(match[0])
+    let extraLength = 0
+    if (offset > 0 && lastNode.textContent[offset - 1] === ' ') {
+      offset -= 1
+      extraLength = 1
     }
+    const nodeToReplace = lastNode.splitText(offset)
+    lastNode = nodeToReplace.splitText(match[0].length + extraLength)
+    const kanji = match[1]
+    const furi = match[2]
+    const rubyNode = document.createElement('ruby')
+    rubyNode.addClass('furi')
+    rubyNode.appendText(kanji)
+    rubyNode.createEl('rt', { text: furi })
+    nodeToReplace.replaceWith(rubyNode)
   }
   return element
 }
-
 export default class MarkdownFurigana extends Plugin {
   public postprocessor: MarkdownPostProcessor = (el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
     const blockToReplace = el.querySelectorAll(TAGS)
     if (blockToReplace.length === 0) return
-
     function replace(node: Node) {
       const childrenToReplace: Text[] = []
       node.childNodes.forEach(child => {
@@ -51,28 +46,23 @@ export default class MarkdownFurigana extends Plugin {
         child.replaceWith(convertFurigana(child))
       })
     }
-
     blockToReplace.forEach(block => {
       replace(block)
     })
   }
-
   async onload() {
     console.log('loading Markdown Furigana plugin')
     this.registerMarkdownPostProcessor(this.postprocessor)
     this.registerEditorExtension(viewPlugin)
   }
-
   onunload() {
     console.log('unloading Markdown Furigana plugin')
   }
 }
-
 class RubyWidget extends WidgetType {
   constructor(readonly kanji: string[], readonly furi: string[]) {
     super()
   }
-
   toDOM(view: EditorView): HTMLElement {
     let ruby = document.createElement("ruby")
     this.kanji.forEach((k, i) => {
@@ -82,14 +72,11 @@ class RubyWidget extends WidgetType {
     return ruby
   }
 }
-
 const viewPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
-
   constructor(view: EditorView) {
     this.decorations = this.buildDecorations(view);
   }
-
   update(update: ViewUpdate) {
     if (
       update.docChanged ||
@@ -99,9 +86,7 @@ const viewPlugin = ViewPlugin.fromClass(class {
       this.decorations = this.buildDecorations(update.view);
     }
   }
-
   destroy() { }
-
   buildDecorations(view: EditorView): DecorationSet {
     let builder = new RangeSetBuilder<Decoration>();
     let lines: number[] = [];
@@ -111,16 +96,12 @@ const viewPlugin = ViewPlugin.fromClass(class {
         (_, i) => i + 1,
       );
     }
-
     const currentSelections = [...view.state.selection.ranges];
-
     for (let n of lines) {
       const line = view.state.doc.line(n);
       const startOfLine = line.from;
       const endOfLine = line.to;
-
       let currentLine = false;
-
       currentSelections.forEach((r) => {
         if (r.to >= startOfLine && r.from <= endOfLine) {
           currentLine = true;
@@ -130,10 +111,15 @@ const viewPlugin = ViewPlugin.fromClass(class {
       let matches = Array.from(line.text.matchAll(REGEXP))
       for (const match of matches) {
         let add = true
-        const furi = match[2].split("|").slice(1)
-        const kanji = furi.length === 1 ? [match[1]] : match[1].split("")
-        const from = match.index != undefined ? match.index + line.from : -1
-        const to = from + match[0].length
+        let from = match.index != undefined ? match.index + line.from : -1
+        let extra = 0
+        if (match.index != undefined && match.index > 0 && line.text[match.index - 1] === ' ') {
+          from -= 1
+          extra = 1
+        }
+        const to = from + match[0].length + extra
+        const furi = [match[2]]
+        const kanji = [match[1]]
         currentSelections.forEach((r) => {
           if (r.to >= from && r.from <= to) {
             add = false
